@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Circuit SAT → Akari</title>
+<style>
+  :root{
+    --bg:#212121; --panel:#292929; --line:#3c3c3c; --txt:#EEEEEE; --muted:#ADADAD;
+    --green:#2E9E44; --red:#D93A36; --orange:#FFAB40; --teal:#26A69A; --light:#FFD600;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:Arial,Helvetica,sans-serif}
+  header{padding:18px 24px 6px}
+  h1{font-weight:normal;font-size:26px;margin:0}
+  h1 .arrow{color:var(--orange);padding:0 6px}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px 24px}
+  select,button{font:inherit;font-size:15px;color:var(--txt);background:#303030;border:1px solid #4a4a4a;
+       border-radius:6px;padding:6px 12px;cursor:pointer}
+  button:hover:not(:disabled),select:hover{border-color:var(--orange)}
+  button:disabled{opacity:.4;cursor:default}
+  #desc{color:var(--muted);font-size:15px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:13px;padding:0 24px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:12px;height:12px;display:inline-block;border-radius:3px}
+  #uploadNote{color:var(--muted);font-size:13px;padding:6px 24px 0;line-height:1.5}
+  code{font-family:Consolas,Menlo,monospace;color:#d8d8d8}
+  #status{margin:8px 24px 0;padding:10px 14px;border-left:3px solid var(--line);font-size:16px;min-height:42px}
+  #status.ok{border-color:var(--green)} #status.no{border-color:var(--red)}
+  main{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);gap:16px;padding:14px 24px 28px}
+  @media (max-width:1000px){main{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-width:0}
+  .panel h2{font-weight:normal;font-size:19px;margin:0 0 6px}
+  .panel h2 small{color:var(--muted);font-size:14px}
+  svg#circ{width:100%;height:330px;display:block;background:#242424;border-radius:8px}
+  #boardWrap{height:330px;overflow:auto;background:#242424;border-radius:8px}
+  canvas{display:block}
+  .zoom{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;margin:6px 0 0}
+  #hover{color:var(--muted);font-size:13px;min-height:18px;margin-left:auto}
+  .verdict{font-size:15px;margin:8px 0 2px;min-height:20px}
+  h3{font-weight:normal;font-size:15px;color:var(--muted);margin:12px 0 4px}
+  h3 small{font-size:12px}
+  table.params{border-collapse:collapse;font-size:14px;width:100%}
+  table.params td{padding:3px 8px;border-bottom:1px solid #333}
+  table.params td:first-child{color:var(--muted);width:55%}
+  pre{font-family:Consolas,Menlo,monospace;font-size:12.5px;background:#1b1b1b;border:1px solid #333;border-radius:6px;
+      padding:10px;margin:0;max-height:200px;overflow:auto;line-height:1.35;color:#d8d8d8}
+</style>
+</head>
+<body>
+<header><h1>Circuit SAT <span class="arrow">→</span> Akari</h1></header>
+
+<div class="controls">
+  <label for="ex">Example:</label>
+  <select id="ex"></select>
+  <button id="solve">Solve board</button>
+  <button id="recover" disabled>Recover circuit assignment</button>
+  <button id="reset">Reset</button>
+  <button id="uploadBtn">Upload circuit file…</button>
+  <input type="file" id="file" accept=".txt,text/plain" hidden>
+  <button id="dlCirc">Download circuit</button>
+  <button id="dlBoard">Download board</button>
+  <span id="desc"></span>
+</div>
+<div class="legend">
+  <span><i class="sw" style="background:var(--green)"></i>TRUE</span>
+  <span><i class="sw" style="background:var(--red)"></i>FALSE</span>
+  <span><i class="sw" style="background:var(--light);border-radius:50%"></i>light</span>
+  <span><i class="sw" style="border:2px solid var(--teal)"></i>input / source</span>
+  <span><i class="sw" style="border:2px solid var(--orange)"></i>NAND block</span>
+  <span><i class="sw" style="border:2px solid #9ccfd8"></i>split block</span>
+  <span><i class="sw" style="border:2px solid #9e9e9e"></i>move block</span>
+  <span><i class="sw" style="border:2px solid #7fd18b"></i>TRUE terminator</span>
+</div>
+<div id="uploadNote">Upload a text file in the same format as the circuit's “File encoding” box: one line per node,
+  <code>name: input</code>, <code>name: nand a b</code> or <code>name: output a</code> (exactly one output); lines starting with # are comments.
+  Limits: at most 4 inputs and 8 NAND gates, and the circuit must be drawable without wires crossing. Everything runs in your browser; nothing is uploaded anywhere.</div>
+<div id="status">Pick an example, then press “Solve board”.</div>
+
+<main>
+  <section class="panel">
+    <h2>Input <small>— circuit (DAG of NAND gates)</small></h2>
+    <svg id="circ"></svg>
+    <div class="verdict" id="verdictIn"></div>
+    <h3>Parameters</h3>
+    <table class="params" id="paramsIn"></table>
+    <h3>File encoding <small>(one line per node)</small></h3>
+    <pre id="fileIn"></pre>
+  </section>
+  <section class="panel">
+    <h2>Reduced <small>— Akari board</small></h2>
+    <div id="boardWrap"><canvas id="board"></canvas></div>
+    <div class="zoom"><label for="zoom">Zoom</label><input type="range" id="zoom" min="3" max="18" value="7"><span id="hover"></span></div>
+    <div class="verdict" id="verdictOut"></div>
+    <h3>Parameters</h3>
+    <table class="params" id="paramsOut"></table>
+    <h3>File encoding <small>(grid rows; . white, # black, 0–4 black with a number)</small></h3>
+    <pre id="fileOut"></pre>
+  </section>
+</main>
+
+<script id="core">
+// ======================= core logic (no DOM) =======================
+const TPL = {"H":13,"R0":6,"T":{"PASS":{"lanes":1,"width":3,"rows":["###","###","###","###","###","###","1..","###","###","###","###","###","###"],"ins":[0],"outs":[0],"probe":{}},"DROP":{"lanes":1,"width":4,"rows":["####","####","####","####","####","####","1..#","####","####","####","####","####","####"],"ins":[0],"outs":[],"probe":{}},"SOURCE":{"lanes":1,"width":3,"rows":["###","###","###","###","###","#0#","...","#0#","###","###","###","###","###"],"ins":[],"outs":[0],"probe":{"0":[6,0]}},"TERM":{"lanes":1,"width":5,"rows":["#####","#####","#####","#####","#####","#####","1..0#","#####","#####","#####","#####","#####","#####"],"ins":[0],"outs":[],"probe":{"0":[6,1]}},"MOVE":{"lanes":2,"width":6,"rows":["######","######","######","######","######","######","1..1##","###.##","##0.0#","##0.0#","##0.0#","##0.0#","##0.0#","##0.0#","##0.0#","##0.0#","##0.0#","##0.0#","###.##","###1..","######","######","######","######","######","######"],"ins":[0],"outs":[1],"probe":{}},"SPLIT":{"lanes":2,"width":20,"rows":["####################","####################","####################","####################","####################","############0000000#","1..1######1.........","###.######..0000000#","###.#00001.#0000####","###1......2......###","#####00001.#0000####","##########..0000####","##########1......1##","############0000#.##","################0.0#","################0.0#","################0.0#","################0.0#","#################.##","#################1..","####################","####################","####################","####################","####################","####################"],"ins":[0],"outs":[0,1],"probe":{}},"NAND":{"lanes":2,"width":27,"rows":["###########################","###########################","##########0000#############","########1......############","########..0000#############","##000001.#0000000000#######","1.......2............1##1..","##000001.#0000000000#.##.##","########..0000######0.00.0#","########1......#####0.00.0#","##########0000#######.#0.0#","#################0#..20#.##","################...1#...1##","#################0#..20####","#####################.#####","##########0000######0.0####","########1......#####0.0####","########..0000######0.0####","##000001.#0000000000#.#####","1.......2............1#####","##000001.#0000000000#######","########..0000#############","########1......############","##########0000#############","###########################","###########################"],"ins":[0,1],"outs":[0],"probe":{"0":[6,25]}}}};
+const H = TPL.H, R0 = TPL.R0;
+const LIMITS = { inputs: 4, gates: 8, lines: 24, bytes: 2000, lanes: 7, states: 300000, cells: 40000 };
+
+const EXAMPLES = [
+  { name: 'Single NAND (from the slides)', desc: 'out = NAND(x, y). Satisfiable.',
+    text: `# planar Circuit SAT instance, NAND gates only
+x: input
+y: input
+g: nand x y
+out: output g` },
+  { name: 'x AND NOT x', desc: 'n = ¬x, m = NAND(x, ¬x) = T, out = ¬m = F. NOT satisfiable.',
+    text: `# x AND (NOT x): never true
+x: input
+n: nand x x
+m: nand x n
+out: output o
+o: nand m m` },
+  { name: 'XOR from 4 NANDs', desc: 'out = x XOR y. Satisfiable.',
+    text: `# x XOR y built from four NAND gates
+x: input
+y: input
+a: nand x y
+b: nand x a
+c: nand a y
+out: output d
+d: nand b c` },
+  { name: '(x AND y) AND NOT x', desc: 'Needs x true and false at once. NOT satisfiable.',
+    text: `# (x AND y) AND (NOT x)
+x: input
+y: input
+a: nand x y
+b: nand a a
+n: nand x x
+d: nand b n
+out: output e
+e: nand d d` },
+  { name: '3 inputs', desc: 'out = NAND(NAND(x, y), z) = (x AND y) OR NOT z. Satisfiable.',
+    text: `# three inputs
+x: input
+y: input
+z: input
+a: nand x y
+b: nand a z
+out: output b` },
+];
+
+// ---------------- circuit file ----------------
+function parseCircuit(text) {
+  if (text.length > LIMITS.bytes) throw new Error(`File too large (max ${LIMITS.bytes} characters).`);
+  const nodes = new Map(), order = []; let sink = null, n = 0;
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.replace(/#.*$/, '').trim(); if (!line) return;
+    if (++n > LIMITS.lines) throw new Error(`Too many lines (max ${LIMITS.lines}).`);
+    const m = line.match(/^([A-Za-z_][A-Za-z0-9_]{0,7})\s*:\s*(input|nand|output)\b\s*(.*)$/i);
+    if (!m) throw new Error(`Line ${i + 1}: expected "name: input", "name: nand a b" or "name: output a", got "${raw.trim()}".`);
+    const name = m[1], type = m[2].toLowerCase(), args = m[3].trim() ? m[3].trim().split(/\s+/) : [];
+    if (nodes.has(name) || (sink && sink.name === name)) throw new Error(`Line ${i + 1}: name "${name}" is used twice.`);
+    for (const a of args) if (!/^[A-Za-z_][A-Za-z0-9_]{0,7}$/.test(a)) throw new Error(`Line ${i + 1}: bad name "${a}".`);
+    const want = { input: 0, nand: 2, output: 1 }[type];
+    if (args.length !== want) throw new Error(`Line ${i + 1}: "${type}" takes ${want} argument${want === 1 ? '' : 's'}, got ${args.length}.`);
+    if (type === 'output') { if (sink) throw new Error(`Line ${i + 1}: only one output is allowed.`); sink = { name, src: args[0], line: i + 1 }; return; }
+    nodes.set(name, { name, type, args, line: i + 1 }); order.push(name);
+  });
+  if (!sink) throw new Error('The circuit needs exactly one "output" line.');
+  for (const nd of [...nodes.values(), { args: [sink.src], line: sink.line }])
+    for (const a of nd.args) if (!nodes.has(a)) throw new Error(`Line ${nd.line}: "${a}" is not defined.`);
+  const inputs = order.filter(k => nodes.get(k).type === 'input'), gates = order.filter(k => nodes.get(k).type === 'nand');
+  if (!inputs.length) throw new Error('The circuit needs at least one input.');
+  if (inputs.length > LIMITS.inputs) throw new Error(`Too many inputs: ${inputs.length} (max ${LIMITS.inputs}).`);
+  if (gates.length > LIMITS.gates) throw new Error(`Too many NAND gates: ${gates.length} (max ${LIMITS.gates}).`);
+  // acyclic + topological order
+  const topo = [], state = new Map();
+  const visit = (k, path) => {
+    if (state.get(k) === 2) return;
+    if (state.get(k) === 1) throw new Error(`The circuit has a cycle: ${[...path, k].join(' → ')}. It must be a DAG.`);
+    state.set(k, 1); for (const a of nodes.get(k).args) visit(a, [...path, k]); state.set(k, 2); topo.push(k);
+  };
+  for (const k of order) visit(k, []);
+  return { nodes, inputs, gates, sink, topo };
+}
+function evaluate(c, assign) {
+  const v = new Map();
+  for (const k of c.topo) { const nd = c.nodes.get(k); v.set(k, nd.type === 'input' ? !!assign[k] : !(v.get(nd.args[0]) && v.get(nd.args[1]))); }
+  v.set(c.sink.name, v.get(c.sink.src)); return v;
+}
+function bruteForce(c) {
+  const sat = [];
+  for (let m = 0; m < 1 << c.inputs.length; m++) {
+    const a = {}; c.inputs.forEach((x, i) => (a[x] = !!(m >> i & 1)));
+    if (evaluate(c, a).get(c.sink.name)) sat.push(a);
+  }
+  return sat;
+}
+function encodeCircuit(c) {
+  const out = ['# planar Circuit SAT instance (NAND gates)', '# name: input | name: nand a b | name: output a'];
+  for (const k of c.topo) { const nd = c.nodes.get(k); out.push(`${k}: ${nd.type}${nd.args.length ? ' ' + nd.args.join(' ') : ''}`); }
+  out.push(`${c.sink.name}: output ${c.sink.src}`); return out.join('\n');
+}
+function circuitParams(c) {
+  const fan = new Map([...c.nodes.keys()].map(k => [k, 0]));
+  for (const k of c.gates) for (const a of c.nodes.get(k).args) fan.set(a, fan.get(a) + 1);
+  fan.set(c.sink.src, fan.get(c.sink.src) + 1);
+  const depth = new Map();
+  for (const k of c.topo) { const nd = c.nodes.get(k); depth.set(k, nd.type === 'input' ? 0 : 1 + Math.max(...nd.args.map(a => depth.get(a)))); }
+  return { inputs: c.inputs.length, gates: c.gates.length, wires: 2 * c.gates.length + 1,
+           maxFan: Math.max(...fan.values()), depth: depth.get(c.sink.src), depthMap: depth };
+}
+
+// ---------------- layout planning: lanes, one block per stage, no crossings ----------------
+function planLayout(c) {
+  const need = new Set(); const stack = [c.sink.src];
+  while (stack.length) { const k = stack.pop(); if (need.has(k)) continue; need.add(k); stack.push(...c.nodes.get(k).args); }
+  const gates = c.gates.filter(g => need.has(g)), gi = new Map(gates.map((g, i) => [g, i]));
+  const sigs = [...c.inputs.filter(x => need.has(x)), ...gates], si = new Map(sigs.map((s, i) => [s, i]));
+  const uses = sigs.map(() => 0); uses[si.get(c.sink.src)]++;
+  const gArgs = gates.map(g => c.nodes.get(g).args.map(a => si.get(a)));
+  gArgs.forEach(([a, b]) => { uses[a]++; uses[b]++; });
+  const ALL = (1 << gates.length) - 1, outS = si.get(c.sink.src);
+  const nIn = sigs.length - gates.length;
+  const remaining = (s, done) => { let r = uses[s]; gArgs.forEach((ab, g) => { if (done >> g & 1) r -= (ab[0] === s) + (ab[1] === s); }); return r; };
+    for (let L = 1; L <= LIMITS.lanes; L++) {
+    const seen = new Map(), queue = [];
+    { const lanes = Array(L).fill(-1), key = lanes.join(',') + '|0|0'; seen.set(key, null); queue.push({ lanes, done: 0, intro: 0, key }); }
+    for (let qi = 0; qi < queue.length; qi++) {
+      if (seen.size > LIMITS.states) return { error: 'The layout search got too big. Try a smaller circuit.' };
+      const st = queue[qi], { lanes, done, intro } = st;
+      const tok = sigs.map(() => 0); lanes.forEach(s => s >= 0 && tok[s]++);
+      if (done === ALL && lanes.filter(s => s >= 0).length === 1 && tok[outS] === 1) {
+        const ops = []; for (let s = st; seen.get(s.key); s = seen.get(s.key).prev) ops.unshift(seen.get(s.key).op);
+        return { L, ops, sigs, gates, need };
+      }
+      const push = (nl, nd, op, ni = intro) => {
+        const key = nl.join(',') + '|' + nd + '|' + ni; if (seen.has(key)) return;
+        // prune: a signal still needed but with no token left can never come back
+        const t2 = sigs.map(() => 0); nl.forEach(s => s >= 0 && t2[s]++);
+        for (let s = 0; s < sigs.length; s++) {
+          const r = remaining(s, nd);
+          const produced = s < nIn ? (ni >> s & 1) : (nd >> (s - nIn) & 1);
+          if (produced && r > 0 && t2[s] === 0) return;
+        }
+        seen.set(key, { prev: st, op }); queue.push({ lanes: nl, done: nd, intro: ni, key });
+      };
+      for (let i = 0; i < L; i++) {
+        const s = lanes[i];
+        if (s < 0) { for (let x = 0; x < nIn; x++) if (!(intro >> x & 1)) { const nl = lanes.slice(); nl[i] = x; push(nl, done, { type: 'INTRO', top: i, sig: x }, intro | (1 << x)); } continue; }
+        for (const d of [1, -1]) {
+          const j = i + d; if (j < 0 || j >= L || lanes[j] >= 0) continue;
+          const nl = lanes.slice(); nl[j] = s; nl[i] = -1;
+          push(nl, done, { type: 'MOVE', top: Math.min(i, j), mirror: d < 0, sig: s });
+          if (tok[s] < remaining(s, done)) { const n2 = lanes.slice(); n2[j] = s; push(n2, done, { type: 'SPLIT', top: Math.min(i, j), mirror: d < 0, sig: s }); }
+        }
+        if (i + 1 < L && lanes[i + 1] >= 0) {
+          const a = s, b = lanes[i + 1];
+          gArgs.forEach((ab, g) => {
+            if (done >> g & 1) return;
+            if (!((ab[0] === a && ab[1] === b) || (ab[0] === b && ab[1] === a))) return;
+            const gs = nIn + g;
+            for (const mirror of [false, true]) {
+              const nl = lanes.slice(); nl[i] = nl[i + 1] = -1; nl[mirror ? i + 1 : i] = gs;
+              push(nl, done | (1 << g), { type: 'NAND', top: i, mirror, sig: gs });
+            }
+          });
+        }
+      }
+    }
+  }
+  return { error: `The demo couldn't find a way to lay this circuit out without wires crossing (it searched layouts with up to ${LIMITS.lanes} lanes). It has no crossover gadget, so it only accepts circuits it can draw without crossings.` };
+}
+
+// ---------------- board assembly ----------------
+function mirrorRows(rows) { return rows.slice().reverse(); }
+function passRows(W) {
+  const rows = Array.from({ length: H }, () => '#'.repeat(W).split(''));
+  rows[R0][0] = '1'; for (let c = 1; c < W; c++) rows[R0][c] = '.';
+  for (let c = 2; c < W - 1; c++) rows[R0 - 1][c] = rows[R0 + 1][c] = '0';
+  return rows.map(r => r.join(''));
+}
+function buildBoard(c, plan) {
+  const { L, ops, sigs } = plan;
+  const name = s => sigs[s];
+  const stages = [], first = [];
+  let k = 0; while (k < ops.length && ops[k].type === 'INTRO') first.push(ops[k++]);
+  stages.push({ W: TPL.T.SOURCE.width, kind: 'SOURCE', intros: first });
+  for (; k < ops.length; k++) stages.push(ops[k].type === 'INTRO' ? { W: TPL.T.SOURCE.width, kind: 'SOURCE', intros: [ops[k]] } : { W: TPL.T[ops[k].type].width + 1, kind: ops[k].type, op: ops[k] });
+  stages.push({ W: TPL.T.TERM.width, kind: 'TERM' });
+  const M = 1, rowsN = L * H + 2 * M, colsN = stages.reduce((a, s) => a + s.W, 0) + 2 * M;
+  if (rowsN * colsN > LIMITS.cells) throw new Error(`The Akari board would be too big (${rowsN} × ${colsN}).`);
+  const g = Array.from({ length: rowsN }, () => Array(colsN).fill('#'));
+  const blit = (rows, r0, c0) => rows.forEach((row, i) => [...row].forEach((ch, j) => { g[r0 + i][c0 + j] = ch; }));
+  const blocks = [], probes = new Map(), wires = [];
+  let lanes = Array(L).fill(-1), x = M;
+  for (const st of stages) {
+    const busy = new Set();
+    if (st.kind === 'SOURCE') {
+      for (const op of st.intros) {
+        const l = op.top, s = op.sig, r = M + l * H; busy.add(l); lanes[l] = s;
+        blit(TPL.T.SOURCE.rows, r, x); probes.set(name(s), [r + R0, x]);
+        wires.push({ r: r + R0, c0: x, c1: x + st.W - 1, sig: name(s) });
+        blocks.push({ kind: 'SOURCE', label: 'input ' + name(s), r, c: x, h: H, w: st.W });
+      }
+    } else if (st.kind === 'TERM') {
+      const l = lanes.findIndex(s => s >= 0), r = M + l * H;
+      blit(TPL.T.TERM.rows, r, x); probes.set(c.sink.name, [r + R0, x + 1]);
+      wires.push({ r: r + R0, c0: x + 1, c1: x + 2, sig: name(lanes[l]) });
+      blocks.push({ kind: 'TERM', label: 'TRUE terminator', r, c: x, h: H, w: st.W });
+    } else {
+      const op = st.op, t = TPL.T[op.type], r = M + op.top * H, W = st.W;
+      // a block plus a 1-cell corridor extension so every stage has room for a junction
+      let rows = op.mirror ? mirrorRows(t.rows) : t.rows.slice();
+      const ext = rows.map((row, i) => {
+        const last = row[row.length - 1];
+        const isLane = (i === R0 || i === R0 + H) && last === '.';
+        return row + (isLane ? '.' : '#');
+      });
+      // widen corridor walls: the old far end becomes interior
+      blit(ext, r, x);
+      for (const lr of [R0, R0 + H]) if (ext[lr] && ext[lr][W - 1] === '.') {
+        g[r + lr - 1][x + W - 2] = '0'; g[r + lr + 1][x + W - 2] = '0';
+      }
+      busy.add(op.top); busy.add(op.top + 1);
+      const label = op.type === 'NAND' ? 'NAND ' + name(op.sig) : op.type === 'SPLIT' ? 'split ' + name(op.sig) : 'move ' + name(op.sig);
+      blocks.push({ kind: op.type, label, r, c: x, h: 2 * H, w: W });
+      if (op.type === 'NAND') {
+        const [pr, pc] = t.probe['0']; const rr = op.mirror ? 2 * H - 1 - pr : pr;
+        probes.set(name(op.sig), [r + rr, x + pc]);
+        wires.push({ r: r + rr, c0: x + pc, c1: x + W - 1, sig: name(op.sig) });
+      }
+      // update lanes
+      const i = op.top;
+      if (op.type === 'MOVE') { const s = lanes[op.mirror ? i + 1 : i]; lanes[i] = lanes[i + 1] = -1; lanes[op.mirror ? i : i + 1] = s; }
+      else if (op.type === 'SPLIT') { const s = lanes[op.mirror ? i + 1 : i]; lanes[i] = lanes[i + 1] = s; }
+      else { lanes[i] = lanes[i + 1] = -1; lanes[op.mirror ? i + 1 : i] = op.sig; }
+    }
+    if (st.kind !== 'TERM') {
+      lanes.forEach((s, l) => {
+        if (s < 0 || busy.has(l)) return;
+        // lane passes through unchanged (lanes array already updated; busy lanes excluded)
+        const r = M + l * H; blit(passRows(st.W), r, x);
+        wires.push({ r: r + R0, c0: x + 1, c1: x + st.W - 1, sig: name(s) });
+      });
+    }
+    x += st.W;
+  }
+  const grid = g.map(r => r.join(''));
+  return { grid, rows: rowsN, cols: colsN, blocks, probes, wires, L };
+}
+function boardParams(b) {
+  let white = 0, black = 0, clue = 0; const byClue = [0, 0, 0, 0, 0];
+  for (const row of b.grid) for (const ch of row) { if (ch === '.') white++; else if (ch === '#') black++; else { clue++; byClue[+ch]++; } }
+  const count = k => b.blocks.filter(x => x.kind === k).length;
+  return { rows: b.rows, cols: b.cols, white, black, clue, byClue, nand: count('NAND'), split: count('SPLIT'), move: count('MOVE'), lanes: b.L };
+}
+function encodeBoard(b) {
+  return [`# Akari instance: ${b.rows} rows x ${b.cols} columns`, '# . white   # black   0-4 black with a number', ...b.grid].join('\n');
+}
+
+// ---------------- Akari solver: CNF + DPLL with watched literals ----------------
+function akariSolve(grid, firstCells = [], maxSteps = 3e6) {
+  const R = grid.length, C = grid[0].length, id = new Int32Array(R * C).fill(-1), cells = [];
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) if (grid[r][c] === '.') { id[r * C + c] = cells.length; cells.push([r, c]); }
+  const n = cells.length, clauses = [], forbid = new Uint8Array(n);
+  const at = (r, c) => (r < 0 || c < 0 || r >= R || c >= C) ? -1 : id[r * C + c];
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) if (grid[r][c] === '0')
+    for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const v = at(r + dr, c + dc); if (v >= 0) forbid[v] = 1; }
+  const segOf = [new Int32Array(n), new Int32Array(n)], segs = [];
+  for (const dir of [0, 1]) {
+    const outer = dir ? C : R, inner = dir ? R : C;
+    for (let a = 0; a < outer; a++) { let cur = [];
+      for (let b = 0; b <= inner; b++) {
+        const v = b < inner ? (dir ? at(b, a) : at(a, b)) : -1;
+        if (v >= 0) cur.push(v); else if (cur.length) { cur.forEach(u => (segOf[dir][u] = segs.length)); segs.push(cur); cur = []; }
+      } }
+  }
+  const lit = (v, pos) => 2 * v + (pos ? 0 : 1);
+  for (let v = 0; v < n; v++) if (forbid[v]) clauses.push([lit(v, false)]);
+  for (const s of segs) { const cand = s.filter(v => !forbid[v]); for (let i = 0; i < cand.length; i++) for (let j = i + 1; j < cand.length; j++) clauses.push([lit(cand[i], false), lit(cand[j], false)]); }
+  for (let v = 0; v < n; v++) { const cl = [...new Set([...segs[segOf[0][v]], ...segs[segOf[1][v]]])].filter(u => !forbid[u]).map(u => lit(u, true)); clauses.push(cl); }
+  const combos = (arr, k) => k === 0 ? [[]] : arr.flatMap((x, i) => combos(arr.slice(i + 1), k - 1).map(r => [x, ...r]));
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
+    const ch = grid[r][c]; if (!/[1-4]/.test(ch)) continue; const k = +ch;
+    const nb = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dr, dc]) => at(r + dr, c + dc)).filter(v => v >= 0 && !forbid[v]);
+    if (k > nb.length) clauses.push([]);
+    for (const s of combos(nb, k + 1)) clauses.push(s.map(v => lit(v, false)));
+    for (const s of combos(nb, nb.length - k + 1)) clauses.push(s.map(v => lit(v, true)));
+  }
+  // DPLL
+  const val = new Int8Array(n), trail = [], watch = Array.from({ length: 2 * n }, () => []);
+  const value = l => { const a = val[l >> 1]; return a === 0 ? 0 : ((a === 1) === ((l & 1) === 0) ? 1 : -1); };
+  const units = [];
+  for (const cl of clauses) { if (cl.length === 0) return { sat: false, steps: 0, n }; if (cl.length === 1) units.push(cl[0]); else { watch[cl[0]].push(cl); watch[cl[1]].push(cl); } }
+  let qhead = 0, steps = 0;
+  const assignLit = l => { val[l >> 1] = (l & 1) ? -1 : 1; trail.push(l); };
+  function propagate() {
+    while (qhead < trail.length) {
+      const p = trail[qhead++], fl = p ^ 1, ws = watch[fl];
+      for (let i = 0; i < ws.length;) {
+        if (++steps > maxSteps) return 'limit';
+        const cl = ws[i]; if (cl[0] === fl) { cl[0] = cl[1]; cl[1] = fl; }
+        if (value(cl[0]) === 1) { i++; continue; }
+        let moved = false;
+        for (let k = 2; k < cl.length; k++) if (value(cl[k]) !== -1) { cl[1] = cl[k]; cl[k] = fl; watch[cl[1]].push(cl); ws[i] = ws[ws.length - 1]; ws.pop(); moved = true; break; }
+        if (moved) continue;
+        if (value(cl[0]) === -1) return 'conflict';
+        assignLit(cl[0]); i++;
+      }
+    }
+    return 'ok';
+  }
+  for (const u of units) { const v = value(u); if (v === -1) return { sat: false, steps, n }; if (v === 0) assignLit(u); }
+  const order = [...firstCells.map(([r, c]) => at(r, c)).filter(v => v >= 0)];
+  const inFirst = new Set(order); for (let v = 0; v < n; v++) if (!inFirst.has(v)) order.push(v);
+  const dec = []; let oi = 0;
+  const undo = to => { while (trail.length > to) val[trail.pop() >> 1] = 0; qhead = Math.min(qhead, trail.length); };
+  let res = propagate();
+  for (;;) {
+    if (res === 'limit') return { sat: null, steps, n };
+    if (res === 'conflict') {
+      for (;;) {
+        if (!dec.length) return { sat: false, steps, n };
+        const d = dec.pop(); undo(d.pos); oi = d.oi;
+        if (!d.flipped) { dec.push({ ...d, flipped: true }); assignLit(d.l ^ 1); qhead = d.pos; break; }
+      }
+      res = propagate(); continue;
+    }
+    while (oi < order.length && val[order[oi]] !== 0) oi++;
+    if (oi === order.length) break;
+    const v = order[oi], l = lit(v, inFirst.has(v));
+    dec.push({ l, pos: trail.length, oi, flipped: false }); qhead = trail.length; assignLit(l);
+    res = propagate();
+  }
+  const lights = new Set(); for (let v = 0; v < n; v++) if (val[v] === 1) lights.add(cells[v][0] * C + cells[v][1]);
+  return { sat: true, lights, steps, n, C };
+}
+if (typeof module !== 'undefined') module.exports = { TPL, LIMITS, EXAMPLES, parseCircuit, evaluate, bruteForce, encodeCircuit, circuitParams, planLayout, buildBoard, boardParams, encodeBoard, akariSolve };
+
+</script>
+
+<script>
+// ======================= UI =======================
+const $ = id => document.getElementById(id);
+const NS = 'http://www.w3.org/2000/svg';
+const COL = { T: '#2E9E44', F: '#D93A36', orange: '#FFAB40', teal: '#26A69A', fg: '#EEEEEE', muted: '#ADADAD' };
+const BLOCK_COL = { SOURCE: '#26A69A', NAND: '#FFAB40', SPLIT: '#9ccfd8', MOVE: '#9e9e9e', TERM: '#7fd18b' };
+let cur = null, uploaded = null;
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function el(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent && parent.appendChild(e); return e; }
+function setStatus(cls, html) { const s = $('status'); s.className = cls; s.innerHTML = html; }
+function paramTable(tbl, rows) { tbl.innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join(''); }
+
+// ---------- circuit drawing ----------
+function drawCircuit() {
+  const svg = $('circ'), c = cur.c, vals = cur.values; svg.innerHTML = '';
+  const defs = el('defs', {}, svg);
+  for (const [id, col] of [['ar', COL.fg], ['arT', COL.T], ['arF', COL.F]]) {
+    const m = el('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, defs);
+    el('path', { d: 'M1 1L9 5L1 9z', fill: col }, m);
+  }
+  const depth = cur.cp.depthMap, maxD = Math.max(...depth.values()) + 1;
+  const layers = Array.from({ length: maxD + 1 }, () => []);
+  for (const k of c.topo) layers[depth.get(k)].push(k);
+  layers[maxD].push(c.sink.name);
+  const dx = maxD >= 4 ? 105 : 150, Wv = 100 + maxD * dx, Hv = Math.max(260, Wv * 0.6), top = 30, hgt = Hv - 2 * top;
+  const P = new Map();
+  layers.forEach((ks, d) => ks.forEach((k, i) => P.set(k, { x: 50 + d * dx, y: top + hgt * (i + 1) / (ks.length + 1) })));
+  svg.setAttribute('viewBox', `0 0 ${Wv} ${Hv}`);
+  const rad = k => k === c.sink.name ? 22 : (c.nodes.get(k).type === 'input' ? 20 : 30);
+  const edges = [];
+  for (const k of c.gates) c.nodes.get(k).args.forEach((a, i) => edges.push([a, k, i]));
+  edges.push([c.sink.src, c.sink.name, 0]);
+  for (const [a, b, i] of edges) {
+    const p = P.get(a), q = P.get(b), dup = c.nodes.get(b) && c.nodes.get(b).args[0] === c.nodes.get(b).args[1];
+    const off = dup ? (i ? 18 : -18) : 0;
+    const L = Math.hypot(q.x - p.x, q.y - p.y), ux = (q.x - p.x) / L, uy = (q.y - p.y) / L;
+    const sx = p.x + ux * rad(a), sy = p.y + uy * rad(a), ex = q.x - ux * (rad(b) + 4), ey = q.y - uy * (rad(b) + 4) + off * 0.5;
+    const mx = (sx + ex) / 2 - uy * off, my = (sy + ey) / 2 + ux * off;
+    const v = vals ? (vals.get(a) ? 'T' : 'F') : null, used = cur.plan.need && cur.plan.need.has(a) && (b === c.sink.name || cur.plan.need.has(b));
+    el('path', { d: `M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`, fill: 'none', stroke: v ? COL[v] : COL.fg, 'stroke-width': 2.2,
+      opacity: used ? 1 : 0.35, 'marker-end': `url(#${v ? 'ar' + v : 'ar'})` }, svg);
+    if (v) {
+      const lx = 0.25 * sx + 0.5 * mx + 0.25 * ex, ly = 0.25 * sy + 0.5 * my + 0.25 * ey;
+      el('rect', { x: lx - 11, y: ly - 10, width: 22, height: 20, rx: 4, fill: COL[v] }, svg);
+      el('text', { x: lx, y: ly + 5, 'text-anchor': 'middle', 'font-size': 14, 'font-weight': 'bold', fill: '#fff', 'font-family': 'Arial' }, svg).textContent = v;
+    }
+  }
+  for (const [k, p] of P) {
+    const g = el('g', { opacity: k === c.sink.name || cur.plan.need.has(k) ? 1 : 0.4 }, svg);
+    if (k === c.sink.name) {
+      const ok = vals ? vals.get(k) : null;
+      el('circle', { cx: p.x, cy: p.y, r: 22, fill: 'none', stroke: COL.fg, 'stroke-width': 1.5 }, g);
+      el('circle', { cx: p.x, cy: p.y, r: 17, fill: ok == null ? '#455A64' : (ok ? COL.T : COL.F), stroke: COL.fg, 'stroke-width': 1.5 }, g);
+      el('text', { x: p.x, y: p.y + 40, 'text-anchor': 'middle', 'font-size': 12, fill: COL.muted, 'font-family': 'Arial' }, g).textContent = `${k} (needs T)`;
+    } else if (c.nodes.get(k).type === 'input') {
+      el('circle', { cx: p.x, cy: p.y, r: 20, fill: COL.teal, stroke: COL.fg, 'stroke-width': 1.5 }, g);
+      el('text', { x: p.x, y: p.y + 6, 'text-anchor': 'middle', 'font-size': 17, 'font-weight': 'bold', fill: '#fff', 'font-family': 'Arial' }, g).textContent = k;
+    } else {
+      el('rect', { x: p.x - 30, y: p.y - 17, width: 60, height: 34, rx: 6, fill: COL.orange, stroke: COL.fg, 'stroke-width': 1.5 }, g);
+      el('text', { x: p.x, y: p.y + 5, 'text-anchor': 'middle', 'font-size': 13, 'font-weight': 'bold', fill: '#3a2200', 'font-family': 'Arial' }, g).textContent = 'NAND';
+      el('text', { x: p.x, y: p.y - 23, 'text-anchor': 'middle', 'font-size': 12, fill: COL.muted, 'font-family': 'Arial' }, g).textContent = k;
+    }
+  }
+}
+
+// ---------- board drawing ----------
+function drawBoard() {
+  const b = cur.b, cs = +$('zoom').value, cv = $('board'), dpr = window.devicePixelRatio || 1;
+  cv.width = b.cols * cs * dpr; cv.height = b.rows * cs * dpr; cv.style.width = b.cols * cs + 'px'; cv.style.height = b.rows * cs + 'px';
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const tint = new Map();
+  if (cur.values) for (const w of b.wires) { const v = cur.values.get(w.sig); for (let c = w.c0; c <= w.c1; c++) tint.set(w.r * b.cols + c, v); }
+  for (let r = 0; r < b.rows; r++) for (let c = 0; c < b.cols; c++) {
+    const ch = b.grid[r][c], x = c * cs, y = r * cs;
+    if (ch === '.') {
+      const t = tint.get(r * b.cols + c);
+      ctx.fillStyle = t === undefined ? '#f2f2f2' : (t ? '#bfe5c5' : '#f3c3bf'); ctx.fillRect(x, y, cs, cs);
+      if (cs >= 6) { ctx.strokeStyle = '#bdbdbd'; ctx.lineWidth = 0.5; ctx.strokeRect(x + 0.25, y + 0.25, cs - 0.5, cs - 0.5); }
+    } else {
+      ctx.fillStyle = ch === '#' ? '#0d0d0d' : '#1d1d1d'; ctx.fillRect(x, y, cs, cs);
+      if (ch !== '#' && cs >= 9) { ctx.fillStyle = '#fff'; ctx.font = `bold ${Math.round(cs * 0.72)}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(ch, x + cs / 2, y + cs / 2 + 0.5); }
+    }
+  }
+  if (cur.lights) for (const k of cur.lights) {
+    const r = Math.floor(k / b.cols), c = k % b.cols;
+    ctx.beginPath(); ctx.arc(c * cs + cs / 2, r * cs + cs / 2, cs * 0.36, 0, 7); ctx.fillStyle = '#FFD600'; ctx.fill();
+    ctx.lineWidth = Math.max(0.6, cs * 0.08); ctx.strokeStyle = '#5D4400'; ctx.stroke();
+  }
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  for (const bl of b.blocks) {
+    ctx.strokeStyle = BLOCK_COL[bl.kind]; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+    const pad = bl.kind === 'SOURCE' || bl.kind === 'TERM' ? cs * 4 : cs;
+    ctx.strokeRect(bl.c * cs + 1, bl.r * cs + pad, bl.w * cs - 2, bl.h * cs - 2 * pad); ctx.setLineDash([]);
+    if (cs >= 4 && bl.kind !== 'SOURCE' && bl.kind !== 'TERM') {
+      ctx.font = `${Math.max(10, Math.min(13, cs * 1.4))}px Arial`; ctx.fillStyle = BLOCK_COL[bl.kind];
+      ctx.fillText(bl.label, bl.c * cs + 3, bl.r * cs + pad + 3);
+    }
+  }
+  for (const [k, [r, c]] of b.probes) {
+    const v = cur.values ? (cur.values.get(k) ? COL.T : COL.F) : (k === cur.c.sink.name ? '#7fd18b' : (cur.c.nodes.get(k).type === 'input' ? COL.teal : COL.orange));
+    ctx.strokeStyle = v; ctx.lineWidth = Math.max(2, cs * 0.25); ctx.strokeRect(c * cs - 1, r * cs - 1, cs + 2, cs + 2);
+    ctx.font = `bold ${Math.max(11, Math.min(15, cs * 1.5))}px Arial`; ctx.fillStyle = v; ctx.textBaseline = 'bottom';
+    ctx.fillText(k === cur.c.sink.name ? 'out' : k, c * cs, r * cs - 3); ctx.textBaseline = 'top';
+  }
+}
+$('board').addEventListener('mousemove', e => {
+  if (!cur) return; const cs = +$('zoom').value, rect = $('board').getBoundingClientRect();
+  const c = Math.floor((e.clientX - rect.left) / cs), r = Math.floor((e.clientY - rect.top) / cs);
+  if (r < 0 || c < 0 || r >= cur.b.rows || c >= cur.b.cols) return;
+  const ch = cur.b.grid[r][c], kind = ch === '.' ? 'white' : ch === '#' ? 'black' : `black “${ch}”`;
+  const bl = cur.b.blocks.find(x => r >= x.r && r < x.r + x.h && c >= x.c && c < x.c + x.w);
+  $('hover').textContent = `row ${r}, col ${c}: ${kind}${bl ? ' — ' + bl.label : ''}`;
+});
+$('zoom').oninput = () => cur && drawBoard();
+
+// ---------- loading ----------
+function prepare(text) {
+  const c = parseCircuit(text), plan = planLayout(c);
+  if (plan.error) throw new Error(plan.error);
+  const b = buildBoard(c, plan);
+  return { c, plan, b, cp: circuitParams(c), bp: boardParams(b) };
+}
+function load(key) {
+  const ex = key === 'up' ? uploaded : EXAMPLES[key];
+  let p; try { p = ex.prepared || prepare(ex.text); } catch (e) { setStatus('no', esc(e.message)); return; }
+  ex.prepared = p;
+  cur = { ...p, name: ex.name, lights: null, values: null };
+  $('desc').textContent = ex.desc;
+  const { c, cp, bp, plan } = cur, skipped = c.gates.length - plan.gates.length;
+  paramTable($('paramsIn'), [['inputs', cp.inputs], ['NAND gates', cp.gates + (skipped ? ` (${skipped} not connected to the output)` : '')],
+    ['wires (edges)', cp.wires], ['max fan-out', cp.maxFan], ['depth (gates on longest path)', cp.depth], ['sink', `${c.sink.name}, must be TRUE`]]);
+  paramTable($('paramsOut'), [['board size', `${bp.rows} × ${bp.cols} cells`], ['white cells', bp.white], ['black cells, no number', bp.black],
+    ['black cells with a number', `${bp.clue} (0s: ${bp.byClue[0]}, 1s: ${bp.byClue[1]}, 2s: ${bp.byClue[2]})`],
+    ['lanes (13 rows each)', bp.lanes], ['blocks', `${bp.nand} NAND, ${bp.split} split, ${bp.move} move`], ['inputs (free source wires)', cur.b.blocks.filter(x => x.kind === 'SOURCE').length]]);
+  $('fileIn').textContent = encodeCircuit(c);
+  $('fileOut').textContent = encodeBoard(cur.b);
+  $('verdictIn').textContent = ''; $('verdictOut').textContent = ''; $('recover').disabled = true;
+  const fit = Math.max(3, Math.min(10, Math.floor(($('boardWrap').clientWidth - 4) / cur.b.cols)));
+  $('zoom').value = fit;
+  setStatus('', 'Pick an example, then press “Solve board”.');
+  drawCircuit(); drawBoard();
+}
+$('solve').onclick = () => {
+  const { b, c } = cur, src = c.inputs.filter(x => b.probes.has(x)).map(x => b.probes.get(x));
+  const t0 = performance.now(), res = akariSolve(b.grid, src), ms = Math.round(performance.now() - t0);
+  if (res.sat === null) { setStatus('no', `The solver gave up after ${res.steps.toLocaleString()} steps. Try a smaller circuit.`); return; }
+  if (res.sat) {
+    cur.lights = res.lights; cur.values = null;
+    $('verdictOut').innerHTML = `<span style="color:var(--green)">✓ board solved</span> <span style="color:var(--muted)">(${res.lights.size} lights, ${res.steps.toLocaleString()} solver steps, ${ms} ms)</span>`;
+    $('verdictIn').textContent = ''; $('recover').disabled = false;
+    setStatus('ok', 'The Akari board has a solution. Press “Recover circuit assignment” to read the inputs off the source wires.');
+  } else {
+    cur.lights = null; cur.values = null;
+    const bf = bruteForce(c);
+    $('verdictOut').innerHTML = `<span style="color:var(--red)">✗ no solution exists</span> <span style="color:var(--muted)">(${res.steps.toLocaleString()} solver steps, ${ms} ms)</span>`;
+    $('verdictIn').innerHTML = `<span style="color:var(--red)">✗ no satisfying assignment</span> <span style="color:var(--muted)">(checked all ${1 << c.inputs.length} input combinations: ${bf.length ? 'FOUND ONE?!' : 'none'})</span>`;
+    $('recover').disabled = true;
+    setStatus('no', 'The board has no solution, so the circuit has no satisfying assignment either. (If the circuit had one, lighting every wire by its value would solve the board.)');
+  }
+  drawCircuit(); drawBoard();
+};
+$('recover').onclick = () => {
+  const { b, c } = cur, a = {};
+  for (const x of c.inputs) { const p = b.probes.get(x); a[x] = p ? cur.lights.has(p[0] * b.cols + p[1]) : false; }
+  cur.values = evaluate(c, a);
+  let agree = true;
+  for (const [k, [r, col]] of b.probes) if (cur.values.get(k) !== cur.lights.has(r * b.cols + col)) agree = false;
+  const ok = cur.values.get(c.sink.name) && agree;
+  const asg = c.inputs.map(x => `${x} = ${a[x] ? 'T' : 'F'}`).join(', ');
+  $('verdictIn').innerHTML = ok ? `<span style="color:var(--green)">✓ recovered assignment satisfies the circuit</span> <span style="color:var(--muted)">(${asg})</span>`
+                                : `<span style="color:var(--red)">✗ recovered assignment does not check out</span>`;
+  setStatus(ok ? 'ok' : 'no', `Recovered ${asg}: each input is TRUE exactly when its source wire has a light at its start. Every gate's output wire on the board matches the circuit's value.`);
+  drawCircuit(); drawBoard();
+};
+$('reset').onclick = () => load($('ex').value === 'up' ? 'up' : +$('ex').value);
+$('ex').onchange = $('reset').onclick;
+$('uploadBtn').onclick = () => $('file').click();
+$('file').onchange = async () => {
+  const f = $('file').files[0]; $('file').value = ''; if (!f) return;
+  if (f.size > LIMITS.bytes) { setStatus('no', `Could not load “${esc(f.name)}”: file too large (max ${LIMITS.bytes} characters).`); return; }
+  try {
+    const text = await f.text(), prepared = prepare(text);
+    uploaded = { name: 'Uploaded: ' + f.name, desc: `From your file (${prepared.c.inputs.length} inputs, ${prepared.c.gates.length} NAND gates).`, text, prepared };
+    let o = [...$('ex').options].find(o => o.value === 'up');
+    if (!o) { o = document.createElement('option'); o.value = 'up'; $('ex').appendChild(o); }
+    o.textContent = uploaded.name; $('ex').value = 'up'; load('up');
+    setStatus('', `Loaded “${esc(f.name)}” and built its Akari board. Press “Solve board”.`);
+  } catch (e) { setStatus('no', `Could not load “${esc(f.name)}”: ${esc(e.message)}`); }
+};
+function download(text, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text + '\n'], { type: 'text/plain' }));
+  a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const fname = s => (cur.name || 'circuit').replace(/^Uploaded: /, '').replace(/\.txt$/, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
+$('dlCirc').onclick = () => download(encodeCircuit(cur.c), fname() + '.txt');
+$('dlBoard').onclick = () => download(encodeBoard(cur.b), fname() + '_akari.txt');
+EXAMPLES.forEach((e, i) => { const o = document.createElement('option'); o.value = i; o.textContent = e.name; $('ex').appendChild(o); });
+load(0);
+</script>
+</body>
+</html>

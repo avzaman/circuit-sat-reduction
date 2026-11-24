@@ -1,0 +1,12 @@
+x: input
+y: input
+z: input
+a: nand x y
+b: nand x a
+c: nand a y
+d: nand b c
+e: nand d z
+f: nand d e
+g: nand e z
+h: nand f g
+out: output h
